@@ -20,8 +20,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(moveit_core REQUIRED)
-#find_package(moveit-resources-panda-moveit-config)
-
+find_package(moveit_resources_panda_moveit_config)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_ros_perception REQUIRED)
@@ -52,7 +51,6 @@ rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typ
 include_directories(
   include
   ${EIGEN3_INCLUDE_DIRS}
-  ${moveit_ros_planning_interface_INCLUDE_DIRS}
 )
 
 # Declare dependencies for executables
@@ -86,7 +84,6 @@ set(DEPENDENCIES
 # Install launch files
 install(DIRECTORY
   launch
-  config
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -106,23 +103,10 @@ install(DIRECTORY
 # ament_python_install_package(${PROJECT_NAME})
 
 # Install Python scripts (uncomment if using Python scripts)
-install(PROGRAMS
-  scripts/scene_publisher.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-add_executable(basic_move src/basic_move.cpp)
-
-ament_target_dependencies(
-  basic_move
-  rclcpp
-  geometry_msgs
-  moveit_ros_planning_interface
-)
-
-install(TARGETS
-  basic_move
-  DESTINATION lib/${PROJECT_NAME}
-)
+# install(PROGRAMS
+#   scripts/my_script.py
+#   DESTINATION lib/${PROJECT_NAME}
+# )
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
