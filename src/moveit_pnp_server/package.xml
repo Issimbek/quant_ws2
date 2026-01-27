@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moveit_pnp_server</name>
+  <version>0.0.1</version>
+  <description>Provides a server for moveit motion planning requests as part of automation technical assignment</description>
+  <license>Exclusive and internal use only for Telexistence inc.</license>
+  <url type="website">https://quant-robotics.com</url>
+
+  <maintainer email="candidate@todo.com">Candidate</maintainer>
+
+  <author email="zhaniyarnurlan@gmail.com">Nurlan Zhaniyar</author>
+  <author email="candidate@todo.com">Candidate</author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS2 core dependencies -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>rosidl_default_generators</depend>
+
+  <!-- Action support -->
+  <depend>rclcpp_action</depend>
+
+  <!-- MoveIt2 dependencies -->
+  <depend>moveit_core</depend>
+  <depend>moveit-resources-panda-moveit-config</depend>
+  <depend>moveit_ros_planning</depend>
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>moveit_ros_perception</depend>
+  <depend>moveit_visual_tools</depend>
+
+  <!-- TF2 dependencies -->
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Visualization -->
+  <depend>interactive_markers</depend>
+  <depend>rviz_visual_tools</depend>
+
+  <!-- Other dependencies -->
+  <depend>pluginlib</depend>
+  <depend>geometric_shapes</depend>
+  <depend>pcl_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>rosbag2_cpp</depend>
+
+  <!-- Robot dependencies -->
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>joy</exec_depend>
+
+  <!-- Message generation -->
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

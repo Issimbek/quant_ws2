@@ -1,0 +1,24 @@
+# MotionPlan.action
+# Action definition for MoveIt Pick and Place motion planning requests
+#
+# Goal: The motion planning request parameters
+# Result: The outcome of the motion plan execution
+# Feedback: Status updates during execution
+
+# === Goal ===
+# Command type: 1=MoveToPose, 2=Pick, 3=Place (define in your implementation)
+int32 command_type
+# Target pose for the end effector
+geometry_msgs/Pose target_pose
+# Gripper width for grasping (used in Pick command)
+float64 grab_width
+# Size of the object to pick/place (for collision avoidance)
+geometry_msgs/Vector3 object_size
+---
+# === Result ===
+# Error code: 0=Success, non-zero values indicate specific errors
+int32 error_code
+---
+# === Feedback ===
+# Current status message during execution
+string status
