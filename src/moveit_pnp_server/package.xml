@@ -25,6 +25,8 @@
     <depend>moveit_ros_planning_interface</depend>
     <depend>moveit_ros_perception</depend>
     <depend>moveit_visual_tools</depend>
+    <depend>moveit_kinematics</depend>
+    <depend>moveit_planners_ompl</depend>
     <!--  TF2 dependencies  -->
     <depend>tf2</depend>
     <depend>tf2_ros</depend>

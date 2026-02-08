@@ -17,6 +17,7 @@ from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 
+
 def generate_launch_description():
     # Get package share directories
     moveit_pnp_server_share = get_package_share_directory('moveit_pnp_server')
@@ -89,6 +90,13 @@ def generate_launch_description():
         ]
     )
 
+    movable_box_node = Node(
+        package='moveit_pnp_server',          
+        executable='spawn_movable_box.py',       
+        name='spawn_movable_box',
+        output='screen'
+    )
+    
     # Uncomment when you have the server node implemented
     # moveit_pnp_server_node = Node(
     #     package='moveit_pnp_server',
@@ -103,5 +111,6 @@ def generate_launch_description():
         scene_publisher_node,
         pick_table_tf,
         place_table_tf,
+        movable_box_node
         # moveit_pnp_server_node,
     ])
