@@ -1,91 +1,115 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Pose, Vector3
 from rclpy.action import ActionClient
-
-# Правильный импорт твоего Action
-from moveit_pnp_server.action import MotionPlan  
+from rclpy.executors import MultiThreadedExecutor
+from geometry_msgs.msg import Pose, Vector3
+from moveit_pnp_server.action import MotionPlan
+import threading
+import time
 
 class PickAndPlaceNode(Node):
     def __init__(self):
         super().__init__('pick_and_place_node')
 
-        # Клиент Action
-        self.arm_client = ActionClient(self, MotionPlan, '/move_group')
+        # Убедись, что имя экшена 'motion_plan_action' совпадает с тем, что в твоем сервере!
+        # Если в сервере /move_group, замени здесь.
+        self.arm_client = ActionClient(self, MotionPlan, '/motion_plan_action')
 
-        self.get_logger().info("Waiting for MoveGroup action server...")
+        self.get_logger().info("Waiting for Action server...")
         self.arm_client.wait_for_server()
-        self.get_logger().info("MoveGroup ready!")
+        self.get_logger().info("Connected to Server!")
 
-    def send_action_goal(self, command_type, pose, grab_width=0.05, size=Vector3(x=0.1, y=0.1, z=0.1)):
-        # Создаём Goal
+    def send_goal_sync(self, command_type, x, y, z, grab_width=0.03):
         goal = MotionPlan.Goal()
         goal.command_type = command_type
-        goal.target_pose = pose
+        
+        goal.target_pose.position.x = x
+        goal.target_pose.position.y = y
+        goal.target_pose.position.z = z
+        
+        # ВАЖНО: Ориентация. w=1.0 — это захват смотрит вперед.
+        # Для того чтобы смотреть ВНИЗ (на кубик), нужно повернуть захват.
+        # Если твой сервер сам правит ориентацию, оставь как есть. 
+        # Если нет — используй эти значения для наклона вниз:
+        goal.target_pose.orientation.x = 1.0 
+        goal.target_pose.orientation.y = 0.0
+        goal.target_pose.orientation.z = 0.0
+        goal.target_pose.orientation.w = 0.0
+        
         goal.grab_width = grab_width
-        goal.object_size = size
+        goal.object_size = Vector3(x=0.1, y=0.1, z=0.1)
 
-        self.get_logger().info(
-            f"Sending goal: {['MOVE','PICK','PLACE'][command_type]} "
-            f"to ({pose.position.x:.2f}, {pose.position.y:.2f}, {pose.position.z:.2f})"
-        )
+        cmd_name = ["MOVE", "PICK", "PLACE"][command_type]
+        self.get_logger().info(f"--- Sending: {cmd_name} to ({x}, {y}, {z}) ---")
 
-        # Отправка Goal
+        # Отправляем цель
         send_goal_future = self.arm_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, send_goal_future)
+        
+        # Ждем подтверждения от сервера (принял/отклонил)
+        while not send_goal_future.done():
+            time.sleep(0.1)
+        
         goal_handle = send_goal_future.result()
-
         if not goal_handle.accepted:
-            self.get_logger().error("Goal rejected by MoveGroup")
+            self.get_logger().error(f"Goal {cmd_name} REJECTED by server")
             return False
 
-        # Ждём результат
-        get_result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, get_result_future)
-        result = get_result_future.result().result
+        self.get_logger().info(f"Goal {cmd_name} accepted, executing...")
 
-        if result.error_code != 1:
-            self.get_logger().error(f"Action failed with error code {result.error_code}")
+        # Ждем завершения выполнения
+        result_future = goal_handle.get_result_async()
+        while not result_future.done():
+            time.sleep(0.1)
+            
+        status = result_future.result().status
+        result = result_future.result().result
+
+        if result.error_code == 1:
+            self.get_logger().info(f"SUCCESS: {cmd_name} completed!")
+            return True
+        else:
+            self.get_logger().error(f"FAILED: {cmd_name} with error_code: {result.error_code}")
             return False
 
-        self.get_logger().info("Action succeeded!")
-        return True
+    def run_sequence(self):
+        # Даем время системе инициализироваться
+        time.sleep(2.0)
+        
+        self.get_logger().info("=== STARTING SEQUENCE ===")
 
-    def run_pick_and_place(self):
-        # Позиция PICK на столе 1
-        pick_pose = Pose()
-        pick_pose.position.x = 0.4
-        pick_pose.position.y = 0.0
-        pick_pose.position.z = 0.35
-        pick_pose.orientation.w = 1.0
+        # 1. Сначала MOVE в безопасную точку чуть выше и в стороне
+        if not self.send_goal_sync(0, 0.3, -0.2, 0.5):
+            self.get_logger().warn("Could not move to home, trying next...")
 
-        # Позиция PLACE на столе 2
-        place_pose = Pose()
-        place_pose.position.x = 0.0
-        place_pose.position.y = 0.4
-        place_pose.position.z = 0.35
-        place_pose.orientation.w = 1.0
-
-        self.get_logger().info("Starting Pick & Place sequence...")
-
-        # PICK
-        if not self.send_action_goal(1, pick_pose):
-            self.get_logger().error("Pick failed, aborting!")
+        # 2. PICK кубика (x=0.4, y=0, z=0.35)
+        if not self.send_goal_sync(1, 0.4, 0.0, 0.35, grab_width=0.03):
+            self.get_logger().error("PICK FAILED")
             return
 
-        # PLACE
-        if not self.send_action_goal(2, place_pose):
-            self.get_logger().error("Place failed!")
+        # 3. PLACE на другой стол (x=0, y=0.4, z=0.35)
+        if not self.send_goal_sync(2, 0.0, 0.4, 0.35, grab_width=0.08):
+            self.get_logger().error("PLACE FAILED")
             return
 
-        self.get_logger().info("Pick & Place completed successfully!")
+        self.get_logger().info("=== ALL STEPS COMPLETED! ===")
 
 def main(args=None):
     rclpy.init(args=args)
     node = PickAndPlaceNode()
-    node.run_pick_and_place()
-    rclpy.shutdown()
+
+    # Запускаем логику в отдельном потоке
+    thread = threading.Thread(target=node.run_sequence, daemon=True)
+    thread.start()
+
+    executor = MultiThreadedExecutor()
+    try:
+        rclpy.spin(node, executor=executor)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
