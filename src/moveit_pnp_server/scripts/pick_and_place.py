@@ -2,114 +2,151 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rclpy.executors import MultiThreadedExecutor
-from geometry_msgs.msg import Pose, Vector3
-from moveit_pnp_server.action import MotionPlan
-import threading
 import time
 
-class PickAndPlaceNode(Node):
+from moveit_msgs.srv import GetMotionPlan, GetCartesianPath, ApplyPlanningScene
+from moveit_msgs.action import ExecuteTrajectory
+from geometry_msgs.msg import Pose, PoseStamped
+from moveit_msgs.msg import Constraints, PositionConstraint, PlanningScene, AttachedCollisionObject, CollisionObject
+from shape_msgs.msg import SolidPrimitive
+from control_msgs.action import GripperCommand
+
+class PickAndPlace(Node):
     def __init__(self):
-        super().__init__('pick_and_place_node')
-
-        # Убедись, что имя экшена 'motion_plan_action' совпадает с тем, что в твоем сервере!
-        # Если в сервере /move_group, замени здесь.
-        self.arm_client = ActionClient(self, MotionPlan, '/motion_plan_action')
-
-        self.get_logger().info("Waiting for Action server...")
-        self.arm_client.wait_for_server()
-        self.get_logger().info("Connected to Server!")
-
-    def send_goal_sync(self, command_type, x, y, z, grab_width=0.03):
-        goal = MotionPlan.Goal()
-        goal.command_type = command_type
+        super().__init__('pick_and_place')
+        self.GRIPPER_OFFSET = 0.058
         
-        goal.target_pose.position.x = x
-        goal.target_pose.position.y = y
-        goal.target_pose.position.z = z
+        # Клиент для обновления сцены (нужен для Attach)
+        self.scene_cli = self.create_client(ApplyPlanningScene, 'apply_planning_scene')
         
-        # ВАЖНО: Ориентация. w=1.0 — это захват смотрит вперед.
-        # Для того чтобы смотреть ВНИЗ (на кубик), нужно повернуть захват.
-        # Если твой сервер сам правит ориентацию, оставь как есть. 
-        # Если нет — используй эти значения для наклона вниз:
-        goal.target_pose.orientation.x = 1.0 
-        goal.target_pose.orientation.y = 0.0
-        goal.target_pose.orientation.z = 0.0
-        goal.target_pose.orientation.w = 0.0
+        self.kinematic_srv = self.create_client(GetMotionPlan, '/plan_kinematic_path')
+        self.cartesian_srv = self.create_client(GetCartesianPath, '/compute_cartesian_path')
+        self.execute_action = ActionClient(self, ExecuteTrajectory, '/execute_trajectory')
+        self.gripper_action = ActionClient(self, GripperCommand, '/panda_hand_controller/gripper_cmd')
         
-        goal.grab_width = grab_width
-        goal.object_size = Vector3(x=0.1, y=0.1, z=0.1)
+        self.get_logger().info('System Ready with Object Attachment support.')
 
-        cmd_name = ["MOVE", "PICK", "PLACE"][command_type]
-        self.get_logger().info(f"--- Sending: {cmd_name} to ({x}, {y}, {z}) ---")
-
-        # Отправляем цель
-        send_goal_future = self.arm_client.send_goal_async(goal)
+    def attach_object(self, object_id="movable_box"):
+        """ Логически привязывает объект к руке робота """
+        aco = AttachedCollisionObject()
+        aco.link_name = "panda_link8" # Линк, к которому привязываем
+        aco.object.id = object_id
+        aco.object.header.frame_id = "panda_link8"
         
-        # Ждем подтверждения от сервера (принял/отклонил)
-        while not send_goal_future.done():
-            time.sleep(0.1)
+        # Указываем, какие части робота могут касаться объекта (пальцы),
+        # чтобы MoveIt не считал это столкновением-аварией
+        aco.touch_links = ["panda_leftfinger", "panda_rightfinger", "panda_hand"]
         
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error(f"Goal {cmd_name} REJECTED by server")
-            return False
+        # Важно: Переводим объект из статуса "в мире" в статус "привязан"
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.attached_collision_objects.append(aco)
+        scene.robot_state.is_diff = True
+        
+        req = ApplyPlanningScene.Request()
+        req.scene = scene
+        self.scene_cli.call_async(req)
+        self.get_logger().info(f'Object {object_id} attached to the gripper.')
 
-        self.get_logger().info(f"Goal {cmd_name} accepted, executing...")
+    def set_gripper(self, position):
+        goal = GripperCommand.Goal()
+        goal.command.position = position
+        goal.command.max_effort = 30.0
+        self.gripper_action.wait_for_server()
+        self.gripper_action.send_goal_async(goal)
+        time.sleep(1.5)
 
-        # Ждем завершения выполнения
-        result_future = goal_handle.get_result_async()
-        while not result_future.done():
-            time.sleep(0.1)
-            
-        status = result_future.result().status
-        result = result_future.result().result
+    def plan_kinematic(self, x, y, z):
+        req = GetMotionPlan.Request()
+        mpr = req.motion_plan_request
+        mpr.group_name = "panda_arm"
+        mpr.start_state.is_diff = True
+        
+        target_pose = PoseStamped()
+        target_pose.header.frame_id = "panda_link0"
+        target_pose.pose.position.x = x
+        target_pose.pose.position.y = y
+        target_pose.pose.position.z = z + self.GRIPPER_OFFSET
+        target_pose.pose.orientation.x = 1.0 
+        
+        goal_const = Constraints()
+        pos_const = PositionConstraint()
+        pos_const.header.frame_id = "panda_link0"
+        pos_const.link_name = "panda_link8"
+        pos_const.constraint_region.primitives.append(SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[0.01]))
+        pos_const.constraint_region.primitive_poses.append(target_pose.pose)
+        goal_const.position_constraints.append(pos_const)
+        mpr.goal_constraints.append(goal_const)
 
-        if result.error_code == 1:
-            self.get_logger().info(f"SUCCESS: {cmd_name} completed!")
+        future = self.kinematic_srv.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        res = future.result()
+        if res and res.motion_plan_response.error_code.val == 1:
+            self.execute(res.motion_plan_response.trajectory)
             return True
-        else:
-            self.get_logger().error(f"FAILED: {cmd_name} with error_code: {result.error_code}")
-            return False
+        return False
 
-    def run_sequence(self):
-        # Даем время системе инициализироваться
-        time.sleep(2.0)
+    def plan_cartesian(self, x, y, z):
+        req = GetCartesianPath.Request()
+        req.header.frame_id = "panda_link0"
+        req.group_name = "panda_arm"
+        req.link_name = "panda_link8"
         
-        self.get_logger().info("=== STARTING SEQUENCE ===")
+        target_pose = Pose()
+        target_pose.position.x = x
+        target_pose.position.y = y
+        target_pose.position.z = z + self.GRIPPER_OFFSET
+        target_pose.orientation.x = 1.0 
+        
+        req.waypoints = [target_pose]
+        req.max_step = 0.01
+        
+        future = self.cartesian_srv.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        res = future.result()
+        if res and res.fraction > 0.9:
+            self.execute(res.solution)
+            return True
+        return False
 
-        # 1. Сначала MOVE в безопасную точку чуть выше и в стороне
-        if not self.send_goal_sync(0, 0.3, -0.2, 0.5):
-            self.get_logger().warn("Could not move to home, trying next...")
+    def execute(self, trajectory):
+        goal = ExecuteTrajectory.Goal()
+        goal.trajectory = trajectory
+        self.execute_action.wait_for_server()
+        self.execute_action.send_goal_async(goal)
+        time.sleep(3.0)
 
-        # 2. PICK кубика (x=0.4, y=0, z=0.35)
-        if not self.send_goal_sync(1, 0.4, 0.0, 0.35, grab_width=0.03):
-            self.get_logger().error("PICK FAILED")
-            return
+def main():
+    rclpy.init()
+    node = PickAndPlace()
+    X, Y, Z = 0.4, 0.0, 0.35
 
-        # 3. PLACE на другой стол (x=0, y=0.4, z=0.35)
-        if not self.send_goal_sync(2, 0.0, 0.4, 0.35, grab_width=0.08):
-            self.get_logger().error("PLACE FAILED")
-            return
+    # 1. Подготовка
+    node.set_gripper(0.04)
 
-        self.get_logger().info("=== ALL STEPS COMPLETED! ===")
+    # 2. Подлет
+    node.get_logger().info('Moving to hover point...')
+    node.plan_kinematic(X, Y, Z + 0.15)
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = PickAndPlaceNode()
+    # 3. Спуск
+    node.get_logger().info('Descending...')
+    node.plan_cartesian(X, Y, Z)
 
-    # Запускаем логику в отдельном потоке
-    thread = threading.Thread(target=node.run_sequence, daemon=True)
-    thread.start()
+    # 4. ЗАХВАТ
+    node.get_logger().info('Grasping...')
+    node.set_gripper(0.022)
+    
+    # --- ВОТ ТУТ МАГИЯ ---
+    # Мы вручную говорим MoveIt, что теперь кубик "в руке"
+    node.attach_object("movable_box")
+    # ---------------------
 
-    executor = MultiThreadedExecutor()
-    try:
-        rclpy.spin(node, executor=executor)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    # 5. Подъем (теперь кубик полетит вверх вместе с рукой)
+    node.get_logger().info('Lifting up...')
+    node.plan_cartesian(X, Y, Z + 0.15)
 
-if __name__ == "__main__":
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
     main()
