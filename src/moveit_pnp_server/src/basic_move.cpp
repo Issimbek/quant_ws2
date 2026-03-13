@@ -17,7 +17,7 @@ int main(int argc, char * argv[])
 
   auto logger = rclcpp::get_logger("basic_move_node");
 
-  // 🔥 Даём MoveIt время подключиться к move_group
+//   🔥 Даём MoveIt время подключиться к move_group
   rclcpp::sleep_for(std::chrono::seconds(1));
 
   using moveit::planning_interface::MoveGroupInterface;

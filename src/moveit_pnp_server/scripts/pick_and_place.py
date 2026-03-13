@@ -3,150 +3,140 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 import time
-
-from moveit_msgs.srv import GetMotionPlan, GetCartesianPath, ApplyPlanningScene
+from scipy.spatial.transform import Rotation as R
+from geometry_msgs.msg import Pose, Quaternion
+from moveit_msgs.msg import CollisionObject, PlanningScene, AttachedCollisionObject
+from moveit_msgs.srv import GetCartesianPath, ApplyPlanningScene
 from moveit_msgs.action import ExecuteTrajectory
-from geometry_msgs.msg import Pose, PoseStamped
-from moveit_msgs.msg import Constraints, PositionConstraint, PlanningScene, AttachedCollisionObject, CollisionObject
 from shape_msgs.msg import SolidPrimitive
 from control_msgs.action import GripperCommand
+import tf2_ros
 
-class PickAndPlace(Node):
+class PickAndPlaceNode(Node):
     def __init__(self):
-        super().__init__('pick_and_place')
-        self.GRIPPER_OFFSET = 0.058
+        super().__init__('pick_and_place_node')
         
-        # Клиент для обновления сцены (нужен для Attach)
+        self.box_size = 0.03
+        self.p1 = [0.4, 0.0, 0.35]
+        self.p2 = [0.0, 0.4, 0.35]
+        self.safe_z = 0.55
+        
+        # Клиенты
         self.scene_cli = self.create_client(ApplyPlanningScene, 'apply_planning_scene')
-        
-        self.kinematic_srv = self.create_client(GetMotionPlan, '/plan_kinematic_path')
         self.cartesian_srv = self.create_client(GetCartesianPath, '/compute_cartesian_path')
         self.execute_action = ActionClient(self, ExecuteTrajectory, '/execute_trajectory')
-        self.gripper_action = ActionClient(self, GripperCommand, '/panda_hand_controller/gripper_cmd')
-        
-        self.get_logger().info('System Ready with Object Attachment support.')
+        self.gripper_client = ActionClient(self, GripperCommand, '/panda_hand_controller/gripper_cmd')
 
-    def attach_object(self, object_id="movable_box"):
-        """ Логически привязывает объект к руке робота """
-        aco = AttachedCollisionObject()
-        aco.link_name = "panda_link8" # Линк, к которому привязываем
-        aco.object.id = object_id
-        aco.object.header.frame_id = "panda_link8"
-        
-        # Указываем, какие части робота могут касаться объекта (пальцы),
-        # чтобы MoveIt не считал это столкновением-аварией
-        aco.touch_links = ["panda_leftfinger", "panda_rightfinger", "panda_hand"]
-        
-        # Важно: Переводим объект из статуса "в мире" в статус "привязан"
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.robot_state.attached_collision_objects.append(aco)
-        scene.robot_state.is_diff = True
-        
-        req = ApplyPlanningScene.Request()
-        req.scene = scene
-        self.scene_cli.call_async(req)
-        self.get_logger().info(f'Object {object_id} attached to the gripper.')
+        # Спавним кубик как препятствие
+        time.sleep(1.0) # Ждем инициализацию
+        self.update_scene_object(action="ADD", pos=self.p1)
+        time.sleep(1.0)
+        self.run_mission()
 
-    def set_gripper(self, position):
+    def update_scene_object(self, action, pos=None):
+        scene = PlanningScene(is_diff=True)
+        
+        if action == "ADD":
+            co = CollisionObject()
+            co.id = "movable_box"
+            co.header.frame_id = "panda_link0"
+            box = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[self.box_size]*3)
+            co.primitives.append(box)
+            p = Pose()
+            p.position.x, p.position.y, p.position.z = pos
+            p.orientation.w = 1.0
+            co.primitive_poses.append(p)
+            co.operation = CollisionObject.ADD
+            scene.world.collision_objects.append(co)
+            
+        elif action == "ATTACH":
+            aco = AttachedCollisionObject()
+            aco.link_name = "panda_hand"
+            aco.object.id = "movable_box"
+            aco.object.operation = CollisionObject.ADD
+            # РАЗРЕШАЕМ СТОЛКНОВЕНИЕ С ПАЛЬЦАМИ
+            aco.touch_links = ["panda_leftfinger", "panda_rightfinger"]
+            scene.robot_state.attached_collision_objects.append(aco)
+            
+        elif action == "DETACH":
+            aco = AttachedCollisionObject()
+            aco.object.id = "movable_box"
+            aco.object.operation = CollisionObject.REMOVE
+            scene.robot_state.attached_collision_objects.append(aco)
+
+        self.scene_cli.call_async(ApplyPlanningScene.Request(scene=scene))
+
+    def move_gripper(self, position):
         goal = GripperCommand.Goal()
-        goal.command.position = position
-        goal.command.max_effort = 30.0
-        self.gripper_action.wait_for_server()
-        self.gripper_action.send_goal_async(goal)
-        time.sleep(1.5)
+        goal.command.position = float(position)
+        goal.command.max_effort = 10.0
+        self.gripper_client.wait_for_server()
+        self.gripper_client.send_goal_async(goal)
+        self.get_logger().info(f"Гриппер -> {position} м")
 
-    def plan_kinematic(self, x, y, z):
-        req = GetMotionPlan.Request()
-        mpr = req.motion_plan_request
-        mpr.group_name = "panda_arm"
-        mpr.start_state.is_diff = True
+    def run_mission(self):
+        q_down = self.get_quaternion_down()
         
-        target_pose = PoseStamped()
-        target_pose.header.frame_id = "panda_link0"
-        target_pose.pose.position.x = x
-        target_pose.pose.position.y = y
-        target_pose.pose.position.z = z + self.GRIPPER_OFFSET
-        target_pose.pose.orientation.x = 1.0 
+        # 1. Захват
+        self.move_gripper(0.08)
+        self.plan_and_move([self.create_pose(self.p1[0], self.p1[1], self.safe_z, q_down), 
+                           self.create_pose(self.p1[0], self.p1[1], self.p1[2], q_down)])
         
-        goal_const = Constraints()
-        pos_const = PositionConstraint()
-        pos_const.header.frame_id = "panda_link0"
-        pos_const.link_name = "panda_link8"
-        pos_const.constraint_region.primitives.append(SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[0.01]))
-        pos_const.constraint_region.primitive_poses.append(target_pose.pose)
-        goal_const.position_constraints.append(pos_const)
-        mpr.goal_constraints.append(goal_const)
+        self.move_gripper(0.02) # Зажимаем
+        time.sleep(1.0)         # Ждем физического касания
+        self.update_scene_object(action="ATTACH") # Логически крепим к пальцам
+        
+        # 2. Перенос
+        self.plan_and_move([self.create_pose(self.p1[0], self.p1[1], self.safe_z, q_down), 
+                           self.create_pose(self.p2[0], self.p2[1], self.safe_z, q_down), 
+                           self.create_pose(self.p2[0], self.p2[1], self.p2[2], q_down)])
+        
+        # 3. Разжим
+        self.move_gripper(0.08)
+        time.sleep(0.5)
+        self.update_scene_object(action="DETACH") # Отпускаем
+        
+        # Отлет
+        self.plan_and_move([self.create_pose(self.p2[0], self.p2[1], self.safe_z, q_down)])
+        self.get_logger().info("Миссия завершена!")
 
-        future = self.kinematic_srv.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        res = future.result()
-        if res and res.motion_plan_response.error_code.val == 1:
-            self.execute(res.motion_plan_response.trajectory)
-            return True
-        return False
-
-    def plan_cartesian(self, x, y, z):
+    def plan_and_move(self, waypoints):
         req = GetCartesianPath.Request()
         req.header.frame_id = "panda_link0"
         req.group_name = "panda_arm"
-        req.link_name = "panda_link8"
-        
-        target_pose = Pose()
-        target_pose.position.x = x
-        target_pose.position.y = y
-        target_pose.position.z = z + self.GRIPPER_OFFSET
-        target_pose.orientation.x = 1.0 
-        
-        req.waypoints = [target_pose]
+        req.waypoints = waypoints
         req.max_step = 0.01
         
         future = self.cartesian_srv.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         res = future.result()
-        if res and res.fraction > 0.9:
-            self.execute(res.solution)
+        
+        if res and res.fraction > 0.8:
+            goal = ExecuteTrajectory.Goal(trajectory=res.solution)
+            self.execute_action.wait_for_server()
+            send_goal_future = self.execute_action.send_goal_async(goal)
+            while not send_goal_future.done():
+                rclpy.spin_once(self, timeout_sec=0.1)
             return True
         return False
 
-    def execute(self, trajectory):
-        goal = ExecuteTrajectory.Goal()
-        goal.trajectory = trajectory
-        self.execute_action.wait_for_server()
-        self.execute_action.send_goal_async(goal)
-        time.sleep(3.0)
+    def get_quaternion_down(self):
+        rot = R.from_euler('xyz', [-180.0, 0.0, -45.0], degrees=True)
+        q = rot.as_quat()
+        return Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
+
+    def create_pose(self, x, y, z, q):
+        p = Pose()
+        p.position.x = float(x)
+        p.position.y = float(y)
+        p.position.z = float(z)
+        p.orientation = q
+        return p
 
 def main():
     rclpy.init()
-    node = PickAndPlace()
-    X, Y, Z = 0.4, 0.0, 0.35
+    node = PickAndPlaceNode()
+    rclpy.spin(node)
 
-    # 1. Подготовка
-    node.set_gripper(0.04)
-
-    # 2. Подлет
-    node.get_logger().info('Moving to hover point...')
-    node.plan_kinematic(X, Y, Z + 0.15)
-
-    # 3. Спуск
-    node.get_logger().info('Descending...')
-    node.plan_cartesian(X, Y, Z)
-
-    # 4. ЗАХВАТ
-    node.get_logger().info('Grasping...')
-    node.set_gripper(0.022)
-    
-    # --- ВОТ ТУТ МАГИЯ ---
-    # Мы вручную говорим MoveIt, что теперь кубик "в руке"
-    node.attach_object("movable_box")
-    # ---------------------
-
-    # 5. Подъем (теперь кубик полетит вверх вместе с рукой)
-    node.get_logger().info('Lifting up...')
-    node.plan_cartesian(X, Y, Z + 0.15)
-
-    node.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
