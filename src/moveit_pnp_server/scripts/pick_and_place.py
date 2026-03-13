@@ -39,7 +39,7 @@ class PickAndPlaceNode(Node):
         if action == "ADD":
             co = CollisionObject()
             co.id = "movable_box"
-            co.header.frame_id = "panda_link0"
+            co.header.frame_id = "world" # возможно из-за этого колизии херятся
             box = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[self.box_size]*3)
             co.primitives.append(box)
             p = Pose()
@@ -57,7 +57,7 @@ class PickAndPlaceNode(Node):
             # РАЗРЕШАЕМ СТОЛКНОВЕНИЕ С ПАЛЬЦАМИ
             aco.touch_links = ["panda_leftfinger", "panda_rightfinger"]
             scene.robot_state.attached_collision_objects.append(aco)
-            
+
         elif action == "DETACH":
             aco = AttachedCollisionObject()
             aco.object.id = "movable_box"
@@ -76,25 +76,28 @@ class PickAndPlaceNode(Node):
 
     def run_mission(self):
         q_down = self.get_quaternion_down()
-        
+        input("1") # Ждем физического контакта
         # 1. Захват
         self.move_gripper(0.08)
+        input("2") # Ждем физического контакта
         self.plan_and_move([self.create_pose(self.p1[0], self.p1[1], self.safe_z, q_down), 
                            self.create_pose(self.p1[0], self.p1[1], self.p1[2], q_down)])
-        
+        input("3") # Ждем физического контакта
         self.move_gripper(0.02) # Зажимаем
         time.sleep(1.0)         # Ждем физического касания
         self.update_scene_object(action="ATTACH") # Логически крепим к пальцам
-        
+        input("4") # Ждем физического контакта
         # 2. Перенос
         self.plan_and_move([self.create_pose(self.p1[0], self.p1[1], self.safe_z, q_down), 
                            self.create_pose(self.p2[0], self.p2[1], self.safe_z, q_down), 
                            self.create_pose(self.p2[0], self.p2[1], self.p2[2], q_down)])
-        
+        input("5") # Ждем физического контакта
         # 3. Разжим
         self.move_gripper(0.08)
+        input("6") # Ждем физического контакта
         time.sleep(0.5)
         self.update_scene_object(action="DETACH") # Отпускаем
+        input("7") # Ждем физического контакта
         
         # Отлет
         self.plan_and_move([self.create_pose(self.p2[0], self.p2[1], self.safe_z, q_down)])
@@ -106,7 +109,7 @@ class PickAndPlaceNode(Node):
         req.group_name = "panda_arm"
         req.waypoints = waypoints
         req.max_step = 0.01
-        
+        req._avoid_collisions = True
         future = self.cartesian_srv.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         res = future.result()
