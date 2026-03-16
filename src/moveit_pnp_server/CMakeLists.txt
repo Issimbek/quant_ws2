@@ -90,41 +90,9 @@ install(DIRECTORY
 # Install meshes/scene files
 install(DIRECTORY
   meshes
-  src
   scripts
   DESTINATION share/${PROJECT_NAME}
 )
-
-add_executable(basic_move src/basic_move.cpp)
-
-ament_target_dependencies(
-  basic_move
-  rclcpp
-  geometry_msgs
-  moveit_ros_planning_interface
-  moveit_visual_tools
-)
-
-add_executable(plan_around_objects src/plan_around_objects.cpp)
-target_include_directories(plan_around_objects PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>)
-target_compile_features(plan_around_objects PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
-ament_target_dependencies(
-  plan_around_objects
-  "moveit_msgs"
-  "moveit_ros_planning_interface"
-  "moveit_visual_tools"
-  "rclcpp"
-)
-
-install(TARGETS
-  basic_move
-  plan_around_objects
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-
 # Install Python scripts
 install(PROGRAMS
   scripts/spawn_movable_box.py
