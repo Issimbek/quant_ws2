@@ -28,7 +28,7 @@ class BoxSpawner(Node):
         pose = Pose()
         pose.position.x = 0.4
         pose.position.y = 0.0
-        pose.position.z = 0.35
+        pose.position.z = 0.316
         pose.orientation.w = 1.0
         
         collision_object.primitives.append(primitive)
